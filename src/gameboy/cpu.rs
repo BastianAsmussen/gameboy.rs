@@ -66,6 +66,15 @@ impl Registers {
         self.d = ((value & 0xFF00) >> 8) as u8;
         self.e = (value & 0xFF) as u8;
     }
+
+    pub const fn get_hl(&self) -> u16 {
+        (self.h as u16) << 8 | self.l as u16
+    }
+
+    pub fn set_hl(&mut self, value: u16) {
+        self.h = ((value & 0xFF00) >> 8) as u8;
+        self.l = (value & 0xFF) as u8;
+    }
 }
 
 #[derive(Debug)]
@@ -91,6 +100,36 @@ enum PrefixTarget {
 }
 
 #[derive(Debug)]
+enum LoadByteTarget {
+    A,
+    B,
+    C,
+    D,
+    E,
+    H,
+    L,
+    Hli,
+}
+
+#[derive(Debug)]
+enum LoadByteSource {
+    A,
+    B,
+    C,
+    D,
+    E,
+    H,
+    L,
+    D8,
+    Hli,
+}
+
+#[derive(Debug)]
+enum LoadType {
+    Byte(LoadByteTarget, LoadByteSource),
+}
+
+#[derive(Debug)]
 enum JumpTest {
     NotZero,
     Zero,
@@ -105,6 +144,7 @@ enum Instruction {
     Inc(IncDecTarget),
     Rlc(PrefixTarget),
     Jp(JumpTest),
+    Ld(LoadType),
 }
 
 impl Instruction {
@@ -143,6 +183,20 @@ impl MemoryBus {
     const fn read_byte(&self, address: u16) -> u8 {
         self.memory[address as usize]
     }
+
+    fn write_byte(&mut self, address: u16, byte: u8) {
+        self.memory[address as usize] = byte;
+    }
+}
+
+macro_rules! add_instruction {
+    ($self:expr, $register:ident) => {{
+        let value = $self.registers.$register;
+        let new_value = $self.add(value);
+        $self.registers.a = new_value;
+
+        $self.pc.wrapping_add(1)
+    }};
 }
 
 #[derive(Debug)]
@@ -176,17 +230,20 @@ impl Cpu {
         self.pc = next_pc;
     }
 
+    fn read_next_byte(&self) -> u8 {
+        unimplemented!()
+    }
+
     fn execute(&mut self, instruction: Instruction) -> u16 {
         match instruction {
             Instruction::Add(target) => match target {
-                ArithmeticTarget::C => {
-                    let value = self.registers.c;
-                    let new_value = self.add(value);
-                    self.registers.a = new_value;
-
-                    self.pc.wrapping_add(1)
-                }
-                _ => self.pc,
+                ArithmeticTarget::A => add_instruction!(self, a),
+                ArithmeticTarget::B => add_instruction!(self, b),
+                ArithmeticTarget::C => add_instruction!(self, c),
+                ArithmeticTarget::D => add_instruction!(self, d),
+                ArithmeticTarget::E => add_instruction!(self, e),
+                ArithmeticTarget::H => add_instruction!(self, h),
+                ArithmeticTarget::L => add_instruction!(self, l),
             },
             Instruction::Jp(jump_test) => {
                 let should_jump = match jump_test {
@@ -199,6 +256,29 @@ impl Cpu {
 
                 self.jump(should_jump)
             }
+            Instruction::Ld(load_type) => match load_type {
+                LoadType::Byte(target, source) => {
+                    let source_value = match source {
+                        LoadByteSource::A => self.registers.a,
+                        LoadByteSource::D8 => self.read_next_byte(),
+                        LoadByteSource::Hli => self.bus.read_byte(self.registers.get_hl()),
+                        _ => panic!("TODO: Implement other sources!"),
+                    };
+
+                    match target {
+                        LoadByteTarget::A => self.registers.a = source_value,
+                        LoadByteTarget::Hli => {
+                            self.bus.write_byte(self.registers.get_hl(), source_value)
+                        }
+                        _ => panic!("TODO: Implement other targets!"),
+                    };
+
+                    match source {
+                        LoadByteSource::D8 => self.pc.wrapping_add(2),
+                        _ => self.pc.wrapping_add(1),
+                    }
+                }
+            },
             _ => self.pc,
         }
     }
